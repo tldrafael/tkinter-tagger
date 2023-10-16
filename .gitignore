@@ -2,3 +2,9 @@ __pycache__/
 id_samples_1*
 labels*
 test.txt
+synthetics/
+am2k_longest1024
+am2k_longest1024_fur
+am2k.txt
+all.zip
+impaths.txt
