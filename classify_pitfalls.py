@@ -14,19 +14,14 @@ def puthash_hexstring(x):
 class App:
     def __init__(self, master, imgpaths):
         self.imgpaths = imgpaths
-        self.maskpaths = [p.replace('/im/', '/gt/').replace('.jpg', '.png') for p in imgpaths]
+        self.maskpaths = [p.replace('/im/', '/results/tritonserver/').replace('.jpg', '.png') for p in imgpaths]
         self.id_ = 0
         self.register = 'labels.txt'
         self.preworked = self.read_register()
 
         self.master = master
-        #self.labels = [[
-        #    'next', 'fur', 'hair', 'sod', 'multiple', 'grid', 'boundary', 'GS', 'transp',
-        #    'car-transp', 'scene', 'detailed', 'camouflage', 'hard', 'ambiguity',
-        #    'card'
-        #    ]]
         self.labels = [[
-            'next', 'bad', 'border-artifacts',
+            'next', 'small', 'bad', 'very', 'border', 'border-small', 'artifacts', 'ambiguity', 'input', 'transp', 'shadow', 'none'
             ]]
         self.run_photo()
 
@@ -34,16 +29,17 @@ class App:
         p = self.imgpaths[self.id_]
         img = Image.open(p)
         print(p, np.array(img).shape)
-        img = img.resize((450, 450), 2)
+        res = 512
+        img = img.resize((res, res), 2)
         gt = Image.open(self.maskpaths[self.id_])
-        gt = gt.resize((450, 450), 2)
+        gt = gt.resize((res, res), 2)
         img_fg = np.array(gt)[..., None] / 255 * np.array(img) / 255
         img_fg = (img_fg * 255).clip(0, 255).astype(np.uint8)
         img_fg = Image.fromarray(img_fg)
-        im_total = Image.new('RGB', (3 * 450, 450))
+        im_total = Image.new('RGB', (3 * res, res))
         im_total.paste(img, (0, 0))
-        im_total.paste(gt, (450, 0))
-        im_total.paste(img_fg, (2 * 450, 0))
+        im_total.paste(gt, (res, 0))
+        im_total.paste(img_fg, (2 * res, 0))
         return ImageTk.PhotoImage(im_total)
 
     def run_photo(self):
@@ -60,7 +56,7 @@ class App:
 
     def create_button(self, i, j, l):
         action = self.button_action(l)
-        btn = tk.Button(self.master, text=l, command=action, width=4, height=2)
+        btn = tk.Button(self.master, text=l, command=action, width=8, height=2)
         btn.grid(row=j + 1, column=i + 2)
         self.master.bind_all(str(j+1), action)
         return btn
@@ -80,7 +76,8 @@ class App:
     def button_action(self, l):
         def actions(*args, **kwargs):
             self.write_label(l)
-            if l in ['nok', 'next']:
+            if True:
+            # if l in ['next', 'none']:
                 self.id_ += 1
                 if self.id_ < len(self.imgpaths):
                     self.run_photo()

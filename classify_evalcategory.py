@@ -20,14 +20,7 @@ class App:
         self.preworked = self.read_register()
 
         self.master = master
-        #self.labels = [[
-        #    'next', 'fur', 'hair', 'sod', 'multiple', 'grid', 'boundary', 'GS', 'transp',
-        #    'car-transp', 'scene', 'detailed', 'camouflage', 'hard', 'ambiguity',
-        #    'card'
-        #    ]]
-        self.labels = [[
-            'next', 'bad', 'border-artifacts',
-            ]]
+        self.labels = [['nok', 'fur', 'hair', 'sod', 'multiple-sod', 'grids', 'boundaries', 'GS', 'transp', 'landscape', 'details', 'camouflage', 'hard-stuff', 'ambiguities']]
         self.run_photo()
 
     def load_photo(self):
@@ -80,12 +73,11 @@ class App:
     def button_action(self, l):
         def actions(*args, **kwargs):
             self.write_label(l)
-            if l in ['nok', 'next']:
-                self.id_ += 1
-                if self.id_ < len(self.imgpaths):
-                    self.run_photo()
-                else:
-                    self.master.quit()
+            self.id_ += 1
+            if self.id_ < len(self.imgpaths):
+                self.run_photo()
+            else:
+                self.master.quit()
         return actions
 
 
