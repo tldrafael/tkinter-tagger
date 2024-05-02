@@ -7,4 +7,5 @@ am2k_longest1024
 am2k_longest1024_fur
 am2k.txt
 all.zip
-impaths.txt
+*.txt
+*.zip
