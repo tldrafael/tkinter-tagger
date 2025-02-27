@@ -20,13 +20,12 @@ class App:
         self.preworked = self.read_register()
 
         self.master = master
-        #self.labels = [[
-        #    'next', 'fur', 'hair', 'sod', 'multiple', 'grid', 'boundary', 'GS', 'transp',
-        #    'car-transp', 'scene', 'detailed', 'camouflage', 'hard', 'ambiguity',
-        #    'card'
-        #    ]]
         self.labels = [[
-            'next', 'bad', 'border-artifacts',
+            'next', 'fur', 'hair', 'sod', 'multiple', 'grid', 'boundary', 'GS', 'transp',
+            'car-transp', 'scene', 'detailed', 'camouflage', 'hard', 'ambiguity', 'card',
+            'tissue-grid', 'shadow', 'hangers', 'mannequins', 'non-opaque', 'chains',
+            'opaqueness',
+            'bad-label'
             ]]
         self.run_photo()
 
@@ -60,7 +59,7 @@ class App:
 
     def create_button(self, i, j, l):
         action = self.button_action(l)
-        btn = tk.Button(self.master, text=l, command=action, width=4, height=2)
+        btn = tk.Button(self.master, text=l, command=action, width=12, height=2)
         btn.grid(row=j + 1, column=i + 2)
         self.master.bind_all(str(j+1), action)
         return btn
