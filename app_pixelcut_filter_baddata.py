@@ -20,22 +20,39 @@ class App:
         self.preworked = self.read_register()
 
         self.master = master
-        self.labels = [['OK', 'NO_FG', 'BAD LABEL', 'HARD OBJ', 'BAD DATA']]
+        #self.labels = [['OK', 'NO_FG', 'BAD LABEL', 'HARD OBJ', 'BAD DATA']]
+        self.labels = ['ok', 'bad-label', 'gaps-error', 'minorgap-error', 'miss-opaqueness', 'too-hard', 'odd', 'no-saliency', 'transparency', 'bad-transparency', 'unprecise', 'grass-ground', 'bad-data', 'jagged-boundaries']
+        # self.labels = ['ok', 'bad-label', 'gaps-error', 'fluid', 'transparency', 'bad-transparency', 'odd', 'bad-data']
+        #tmp = []
+        #for i, l in enumerate(self.labels, 1):
+        #    tmp.append(f'{i}. {l}')
+        #self.labels = [tmp]
+        self.labels = [self.labels]
         self.run_photo()
 
     def load_photo(self):
-        img = Image.open(self.imgpaths[self.id_])
-        # img = Image.fromarray(np.load(self.imgpaths[self.id_]))
-        img = img.resize((450, 450), 2)
-        gt = Image.open(self.maskpaths[self.id_])
-        gt = gt.resize((450, 450), 2)
-        img_fg = np.array(gt)[..., None] / 255 * np.array(img) / 255
+        p = self.imgpaths[self.id_]
+        pgt = self.maskpaths[self.id_]
+
+        size = 630
+        img = Image.open(p)
+        print(p)
+        img = img.resize((size, size), 2)
+
+        gt = Image.open(pgt)
+        gt = gt.resize((size, size), 2)
+        #img_fg = np.array(gt)[..., None] / 255 * np.array(img) / 255
+        green = np.array([[[0.,1.,0.]]])
+        gt2 = np.array(gt)[..., None]/255
+        img_fg = (1-gt2)*green
+        img_fg += np.array(img)/255*gt2
+
         img_fg = (img_fg * 255).clip(0, 255).astype(np.uint8)
         img_fg = Image.fromarray(img_fg)
-        im_total = Image.new('RGB', (3 * 450, 450))
+        im_total = Image.new('RGB', (3 * size, size))
         im_total.paste(img, (0, 0))
-        im_total.paste(gt, (450, 0))
-        im_total.paste(img_fg, (2 * 450, 0))
+        im_total.paste(gt, (size, 0))
+        im_total.paste(img_fg, (2 * size, 0))
         return ImageTk.PhotoImage(im_total)
 
     def run_photo(self):
@@ -45,16 +62,16 @@ class App:
         panel.img = self.load_photo()
         panel.config(image=panel.img)
 
-        panel.grid(row=1, column=1, rowspan=6)
-        for i in range(1):
-            for j in range(len(self.labels[0])):
-                self.create_button(i, j, self.labels[i][j])
+        panel.grid(row=0, column=1, rowspan=1, columnspan=17)
+        for i in range(len(self.labels[0])):
+            for j in range(1):
+                self.create_button(i, j, self.labels[j][i])
 
     def create_button(self, i, j, l):
         action = self.button_action(l)
-        btn = tk.Button(self.master, text=l, command=action, width=4, height=2)
+        btn = tk.Button(self.master, text=l, command=action, width=14, height=2)
         btn.grid(row=j + 1, column=i + 2)
-        self.master.bind_all(str(j+1), action)
+        self.master.bind_all(str(i+1), action)
         return btn
 
     def read_register(self):
