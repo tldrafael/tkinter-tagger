@@ -152,7 +152,11 @@ class App:
         while self.imgpaths[self.id_] in self.preworked:
             self.id_ += 1
         panel.img = self.load_photo()
-        panel.config(image=panel.img)
+        bname = os.path.basename(self.imgpaths[self.id_]).split('+')[0]
+        panel.config(
+            image=panel.img, text=bname, compound='bottom',
+            font=("Helvetica", 20),
+        )
 
         panel.grid(row=0, column=1, rowspan=1, columnspan=17)
         for i in range(len(self.labels[0])):

@@ -39,9 +39,8 @@ def make_mask_green(pil_im, pil_mask):
 class ClickableImageWithMaskAndBlend(QWidget):
     clicked = pyqtSignal()
 
-    size = int(128*1.5) # fit the screen
     # size = int(128*4.85) # fit the screen
-    # size = int(128*4)
+    size = int(128*4)
     def __init__(self, img_path, mask_path, size=(size,size)):
         super().__init__()
         self.img_path = img_path
@@ -133,6 +132,10 @@ class ImageGallery(QWidget):
         row, col = 0, 0
 
         for idx, (img_path, mask_path) in enumerate(self.image_mask_pairs):
+            name_bytes = os.path.basename(img_path).encode('utf-8')
+            if len(name_bytes) > 254:
+                print(f"Skipping {img_path} due to long name.")
+                continue
             widget = ClickableImageWithMaskAndBlend(img_path, mask_path)
             # When the composite widget is clicked, toggle its selection.
             widget.clicked.connect(lambda checked=False, idx=idx, widget=widget: self.toggle_selection(idx, widget))
