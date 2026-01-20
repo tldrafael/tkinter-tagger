@@ -35,7 +35,6 @@ def remove_small_regions(mask, min_area, max_area=None, connectivity=8):
 
 def get_gtpath(p):
     pgt = p.replace('/im/', '/gt/').replace('.jpg', '.png')
-    pgt = pgt.replace('/gt/', '/results/20250508_tritonserver/')
     return pgt
 
 
@@ -78,13 +77,19 @@ class App:
     def __init__(self, master, imgpaths):
         self.imgpaths = imgpaths
         self.gtpaths = [p.replace('/im/', '/gt/').replace('.jpg', '.png') for p in imgpaths]
+
         self.predpaths = [p.replace('/gt/', '/results/2025_0910-tritonserver/') for p in self.gtpaths]
+        # self.gtpaths2 = [p.replace('/gt/', '/results/20250616-refiner-gapmaps+PRODCKPT-from-20250911-expert-hanginghand-afterstg2-sz1k4mixed22k-gmap025PP/') for p in self.gtpaths]
+        self.gtpaths = self.predpaths
+        self.predpaths = self.gtpaths2
+
         self.id_ = 0
         self.register = 'labels.txt'
         self.preworked = self.read_register()
 
         self.master = master
-        self.labels = [['GT better', 'Pred better', 'Both good', 'Both bad', 'odd', 'other-class']]
+        # self.labels = [['GT better', 'Pred better', 'Both good', 'Both bad', 'odd', 'other-class']]
+        self.labels = [['general better', 'expert better', 'Both good', 'Both bad', 'odd', 'other-class']]
         self.run_photo()
 
     def load_photo(self):

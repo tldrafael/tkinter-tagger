@@ -63,12 +63,20 @@ REGISTER_FILE = "labels.txt"
 
 # Fallback labels (unchanged from earlier tidy version)
 LABELS: Tuple[str, ...] = (
-    "GT better",
-    "Predv2 better",
-    "Predv3 better",
+    "20251126-refiner-nogp-noMotorcycles-from-20260116-expert-personAndDesk-afterstg2-sz770mixed28kPP",
+    # "20261112_tritonserver-dinov3",
+    # "20260112_tritonserver",
+    # "gt",
     "all bad",
     "odd",
 )
+#LABELS: Tuple[str, ...] = (
+#    "GT better",
+#    "Predv2 better",
+#    "Predv3 better",
+#    "all bad",
+#    "odd",
+#)
 
 # Fonts (portable fallbacks)
 FONT_CANDIDATES = (
@@ -88,7 +96,13 @@ def pil_open(path: Path) -> Image.Image:
 
 def pil_open_resize(path: Path, size: int) -> Image.Image:
     img = pil_open(path)
-    return img.resize((size, size), Image.BILINEAR)
+    # return img.resize((size, size), Image.BILINEAR)
+    # resize preserving the aspect ratio
+    new_size = max(img.size)
+    scale = size / new_size
+    new_w = int(img.size[0] * scale)
+    new_h = int(img.size[1] * scale)
+    return img.resize((new_w, new_h), Image.BILINEAR)
 
 
 def to_gray_array(img: Image.Image) -> np.ndarray:
@@ -100,7 +114,13 @@ def pil_from_gray(arr: np.ndarray, size: int) -> Image.Image:
     """Given a uint8 grayscale array, resize square and return RGB PIL image."""
     if arr.ndim == 3:
         arr = cv2.cvtColor(arr, cv2.COLOR_BGR2GRAY)
-    arr = cv2.resize(arr, (size, size), interpolation=cv2.INTER_NEAREST)
+    # arr = cv2.resize(arr, (size, size), interpolation=cv2.INTER_NEAREST)
+    # resize preserving aspect ratio
+    new_size = max(arr.shape[1], arr.shape[0])
+    scale = size / new_size
+    new_w = int(arr.shape[1] * scale)
+    new_h = int(arr.shape[0] * scale)
+    #arr = cv2.resize(arr, (new_w, new_h), interpolation=cv2.INTER_NEAREST)
     rgb = cv2.cvtColor(arr, cv2.COLOR_GRAY2RGB)
     return Image.fromarray(rgb)
 
@@ -263,6 +283,8 @@ def choose_best_grid(
         if tile > best_tile:
             best_cols, best_rows, best_tile = cols, rows, tile
 
+    return 2, 2, best_tile-550
+    #return 3, 2, best_tile-50
     return best_cols, best_rows, best_tile
 
 
@@ -294,7 +316,7 @@ class App:
         # Buttons
         for i, lbl in enumerate(LABELS, start=1):
             action = self._make_action(lbl)
-            b = tk.Button(self.btn_frame, text=f"{i}. {lbl}", command=action, width=14, height=2)
+            b = tk.Button(self.btn_frame, text=f"{i}. {lbl}", command=action, width=7*6, height=2)
             b.grid(row=0, column=i - 1, padx=3, pady=3)
             self.root.bind(f"<Key-{i}>", lambda e, fn=action: fn())
         self.root.bind("<Key-q>", lambda e: self.root.quit())
@@ -353,7 +375,7 @@ class App:
         # Screen size
         self.root.update_idletasks()
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-        sw, sh = 3200,1050
+        #sw, sh = 3200,1050
         cols, rows, tile = choose_best_grid(total_tiles, sw, sh, reserved_h=self.reserved_h)
 
         # Clear previous
@@ -362,6 +384,7 @@ class App:
 
         # Load current base
         base_path = self.img_paths[self.index]
+        print(base_path, cv2.imread(str(base_path)).shape)
         title = f"Strong Label – {self.index + 1}/{len(self.img_paths)} – {Path(base_path).name}"
         self.root.title(title)
 
@@ -394,8 +417,9 @@ class App:
         tiles: List[Tuple[str, Optional[str], Image.Image]] = []
 
         # Original tile
-        orig_annot = annotate(base_img, [Path(base_path).name], pos=(10, 10), font_size=max(14, tile // 24))
-        tiles.append(("original", None, orig_annot))
+        # orig_annot = annotate(base_img, [Path(base_path).name], pos=(10, 10), font_size=max(14, tile // 24))
+        # tiles.append(("original", None, orig_annot))
+        tiles.append(("original", None, base_img))
 
         # Case tiles
         for case in self.cases:
@@ -419,7 +443,7 @@ class App:
                 # Ensure grayscale view of mask
                 mask_arr = to_gray_array(mask_pil)
                 mask_tile = pil_from_gray(mask_arr, tile)
-                mask_tile = annotate(mask_tile, [f"{case} – mask"], pos=(10, 10), font_size=font_sz)
+                # mask_tile = annotate(mask_tile, [f"{case} – mask"], pos=(10, 10), font_size=font_sz)
             tiles.append(("mask", case, mask_tile))
 
             # Overlay tile (with metrics)
@@ -455,7 +479,7 @@ class App:
                             lines.append(f"Δmag vs GT: {dmag:.2f}%")
                         if dblob is not None:
                             lines.append(f"Δblobs vs GT: {dblob}")
-                overlay_tile = annotate(overlay_tile, lines, pos=(10, 10), font_size=font_sz)
+                # overlay_tile = annotate(overlay_tile, lines, pos=(10, 10), font_size=font_sz)
 
             tiles.append(("overlay", case, overlay_tile))
 

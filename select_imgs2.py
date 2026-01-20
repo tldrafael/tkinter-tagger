@@ -38,7 +38,7 @@ def make_mask_green(pil_im, pil_mask):
 class ClickableImageWithMaskAndBlend(QWidget):
     clicked = pyqtSignal()
 
-    size = 512
+    size = 384
     def __init__(self, img_path, mask_path, size=(size,size)):
         super().__init__()
         self.img_path = img_path
@@ -83,7 +83,7 @@ class ImageGallery(QWidget):
         scroll_area = QScrollArea()
         scroll_area_widget = QWidget()
         grid = QGridLayout(scroll_area_widget)
-        num_columns = 3  # Adjust the number of columns as needed.
+        num_columns = 4  # Adjust the number of columns as needed.
         row, col = 0, 0
 
         for idx, (img_path, mask_path) in enumerate(self.image_mask_pairs):
@@ -124,8 +124,8 @@ class ImageGallery(QWidget):
 import re
 def get_gtpath(p):
     newp = re.sub(r'\.jpg$', '.png', p)
-    # newp = re.sub(r'\/im\/', '/gt/', newp)
-    newp = re.sub(r'\/im\/', '/results/20250718_tritonserver/', newp)
+    newp = re.sub(r'\/im\/', '/gt/', newp)
+    # newp = re.sub(r'\/im\/', '/results/20250718_tritonserver/', newp)
     return newp
 
 
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     with open(fpath, 'r') as f:
         images = f.read().split('\n')[:-1]
 
-    images = images[:2]
+    images = images[:]
     image_mask_pairs = [(p, get_gtpath(p)) for p in images]
 
     gallery = ImageGallery(image_mask_pairs)

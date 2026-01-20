@@ -7,6 +7,9 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PIL import Image, ImageChops, ImageQt
 import numpy as np
 import os
+from PIL import Image, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # WARNING: this may produce partially decoded images
+
 
 
 # A clickable QLabel that emits a signal when clicked.
@@ -40,7 +43,7 @@ class ClickableImageWithMaskAndBlend(QWidget):
     clicked = pyqtSignal()
 
     # size = int(128*4.85) # fit the screen
-    size = int(128*4)
+    size = int(128*4.5)
     def __init__(self, img_path, mask_path, size=(size,size)):
         super().__init__()
         self.img_path = img_path
@@ -133,7 +136,7 @@ class ImageGallery(QWidget):
 
         for idx, (img_path, mask_path) in enumerate(self.image_mask_pairs):
             name_bytes = os.path.basename(img_path).encode('utf-8')
-            if len(name_bytes) > 254:
+            if len(name_bytes) > 255:
                 print(f"Skipping {img_path} due to long name.")
                 continue
             widget = ClickableImageWithMaskAndBlend(img_path, mask_path)
@@ -151,6 +154,8 @@ class ImageGallery(QWidget):
         self.setLayout(layout)
 
     def toggle_selection(self, idx, widget):
+        img_path, _ = self.image_mask_pairs[idx]
+        print(img_path)
         # Toggle selection status.
         if idx in self.selected_images:
             self.selected_images.remove(idx)
@@ -164,7 +169,9 @@ class ImageGallery(QWidget):
     def save_selection(self):
         # Write the main image paths of the selected units to out.txt.
         with open(fout, "w") as f:
-            for idx in self.selected_images:
+            ixs = list(self.selected_images)
+            ixs.sort()
+            for idx in ixs:
                 img_path, _ = self.image_mask_pairs[idx]
                 f.write(img_path + "\n")
         print("Saved selected image paths to out.txt")
@@ -173,9 +180,13 @@ class ImageGallery(QWidget):
 import re
 def get_gtpath(p):
     newp = re.sub(r'\.jpg$', '.png', p)
-    newp = re.sub(r'\/im\/', '/gt/', newp)
-    # newp = re.sub(r'\/im\/', '/results/20250812_production/', newp)
-    newp = re.sub(r'\/im\/', '/results/20250616-refiner-gapmaps+PRODCKPT-from-20250905-expert-mannequin-afterstg2-sz3k6mixed22kPP/', newp)
+    H = '20250616-refiner-gapmaps+PRODCKPT-from-20250911-expert-hanginghand-afterstg2-sz1k4mixed22k-gmap025PP'
+    # H = '20251028_tritonserver_dinov3'
+    # H = '20251028_tritonserver'
+    # H = '20250925-expert-animals-afterstg2-sz2k2mixed22k'
+    H = '20251028_tritonserver_dt202507'
+    # H = '../gt'
+    newp = re.sub(r'\/im\/', f'/results/{H}/', newp)
     return newp
 
 
@@ -187,13 +198,15 @@ if __name__ == "__main__":
     with open(fpath, 'r') as f:
         images = f.read().split('\n')[:-1]
 
-    i=int(sys.argv[2])
+    i = int(sys.argv[2])
     fout = f'out.{i}.txt'
     if os.path.exists(fout):
         print(f"Output file {fout} already exists. Exiting to avoid overwriting.")
         sys.exit(0)
-    step=1000
-    images = images[i*step:(i+1)*step]
+
+    step = 1000
+    # images = images[i*step:(i+1)*step]
+    images = images[-1000:]
     image_mask_pairs = [(p, get_gtpath(p)) for p in images]
 
     gallery = ImageGallery(image_mask_pairs)
