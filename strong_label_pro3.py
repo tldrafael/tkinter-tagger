@@ -27,19 +27,6 @@ from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 REGISTER_FILE = "labels.txt"
 
-LABELS: Tuple[str, ...] = (
-    "20251126-refiner-nogp-noMotorcycles-from-20260116-expert-personAndDesk-afterstg2-sz770mixed28kPP",
-    "all bad",
-    "odd",
-)
-#LABELS: Tuple[str, ...] = (
-#    "GT better",
-#    "Predv2 better",
-#    "Predv3 better",
-#    "all bad",
-#    "odd",
-#)
-
 FONT_CANDIDATES = (
     "/usr/share/fonts/truetype/ubuntu/Ubuntu-C.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -174,6 +161,9 @@ def count_gap_components(mask: np.ndarray, threshold: int = 10) -> int:
     Count small 'gap' components in mask.
     Pixels below threshold are considered foreground.
     """
+    if isinstance(mask, Image.Image):
+        mask = np.asarray(mask, dtype=np.uint8)
+
     if mask.ndim == 3:
         mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
 
@@ -184,7 +174,7 @@ def count_gap_components(mask: np.ndarray, threshold: int = 10) -> int:
     h, w = foreground.shape
     max_component_area = int(0.25 * h * w)
 
-    _, count = count_connected_components(foreground, min_area=1, max_area=max_component_area)
+    _, count = count_connected_components(foreground, min_area=2, max_area=max_component_area)
     return count
 
 
@@ -285,13 +275,14 @@ def calculate_grid_layout(
 
 class App:
     def __init__(self, root: tk.Tk, image_paths: Sequence[Path],
-                 cases: Sequence[str], register_path: Path):
+                 cases: Sequence[str], labels: Sequence[str], register_path: Path):
         self.root = root
         self.root.title("Strong Label – multi-case")
 
         # State
         self.image_paths = [Path(p) for p in image_paths]
         self.cases = list(cases)
+        self.labels = list(labels)
         self.register_path = Path(register_path)
         self.processed_images = self._load_processed_images()
         self.current_index = 0
@@ -326,7 +317,7 @@ class App:
 
     def _create_label_buttons(self):
         """Create buttons for each label and bind keyboard shortcuts."""
-        for i, label in enumerate(LABELS, start=1):
+        for i, label in enumerate(self.labels, start=1):
             action = self._make_label_action(label)
             button = tk.Button(
                 self.button_frame,
@@ -437,7 +428,7 @@ class App:
         tiles.append(("original", None, base_image))
 
         # Case tiles (mask + overlay for each case)
-        for case in self.cases:
+        for i, case in enumerate(self.cases):
             mask_path = get_mask_path(current_path, case)
 
             # Load mask
@@ -445,6 +436,8 @@ class App:
             if mask_path.exists():
                 try:
                     mask_pil = load_and_resize_image(mask_path, tile_size)
+                    if i == 0:
+                        reference_mask_pil = mask_pil.copy()
                 except Exception:
                     pass
 
@@ -463,10 +456,13 @@ class App:
                 overlay_tile = create_overlay(base_image, mask_pil)
 
                 # Add metrics if GT is available
-                if gt_mask_pil is not None and case.lower() != "gt":
+                if i > 0:
+                    reference = self.cases[0]
                     try:
-                        diff_percent = calculate_mask_difference(gt_mask_pil, mask_pil)
-                        # Could add metrics text here if needed
+                        diff_percent = calculate_mask_difference(reference_mask_pil, mask_pil)
+                        diff_blobs = count_gap_components(mask_pil) - count_gap_components(reference_mask_pil)
+                        txt = f"diff-mag: {diff_percent:.2f}%\ndiff-blob: {diff_blobs}"
+                        overlay_tile = add_text_to_image(overlay_tile, [txt], (10, 10), 14)
                     except Exception:
                         pass
 
@@ -623,6 +619,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("No cases provided. Use --cases or set RUN_NAME environment variable.")
         return 1
 
+    # Build labels from cases plus "all bad" and "odd"
+    labels = list(cases) + ["all bad", "odd"]
+
     # Create and run application
     root = tk.Tk()
 
@@ -635,7 +634,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         except Exception:
             pass
 
-    app = App(root, image_paths, cases, Path(args.register))
+    app = App(root, image_paths, cases, labels, Path(args.register))
     root.mainloop()
     return 0
 

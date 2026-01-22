@@ -10,3 +10,6 @@ all.zip
 *.txt
 *.zip
 *.swp
+out*
+202*
+.vscode/
