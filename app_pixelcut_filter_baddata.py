@@ -21,8 +21,9 @@ class App:
 
         self.master = master
         #self.labels = [['OK', 'NO_FG', 'BAD LABEL', 'HARD OBJ', 'BAD DATA']]
-        self.labels = ['ok', 'bad-label', 'gaps-error', 'minorgap-error', 'miss-opaqueness', 'too-hard', 'odd', 'no-saliency', 'transparency', 'bad-transparency', 'unprecise', 'grass-ground', 'bad-data', 'jagged-boundaries']
+        # self.labels = ['ok', 'bad-label', 'gaps-error', 'minorgap-error', 'miss-opaqueness', 'too-hard', 'odd', 'no-saliency', 'transparency', 'bad-transparency', 'unprecise', 'grass-ground', 'bad-data', 'jagged-boundaries']
         # self.labels = ['ok', 'bad-label', 'gaps-error', 'fluid', 'transparency', 'bad-transparency', 'odd', 'bad-data']
+        self.labels = ['animals', 'food', 'hanginghands', 'mannequins', 'shopee', 'rulers']
         #tmp = []
         #for i, l in enumerate(self.labels, 1):
         #    tmp.append(f'{i}. {l}')

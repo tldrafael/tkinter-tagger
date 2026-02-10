@@ -22,6 +22,7 @@ class App:
 
         self.master = master
         self.labels = [['none', 'hanger']]
+        self.labels = [['animals', 'food', 'hanginghands', 'mannequins', 'shopee', 'rulers', 'none']]
         #self.labels = [[
         #    'none', 'mannequin', 'mannequin2', 'hanger', 'shirt-and-others',
         #    'other-cloth-parts', 'people-on-cloth', 'cloth-but-etc'
