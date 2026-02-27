@@ -528,12 +528,14 @@ class App:
             return "Original"
         elif tile_type == "empty":
             return ""
-        elif tile_type == "mask":
-            return f"{case} (mask)" if case else "Mask"
-        elif tile_type == "overlay":
-            return f"{case} (overlay)" if case else "Overlay"
+        elif case:
+            try:
+                button_number = self.labels.index(case) + 1
+                return f"{button_number} - {case}"
+            except ValueError:
+                return case
         else:
-            return case if case else tile_type.capitalize()
+            return tile_type.capitalize()
 
     # ========================================================================
     # Tile Pop-out Zoom

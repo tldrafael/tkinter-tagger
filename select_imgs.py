@@ -94,7 +94,7 @@ def make_mask_green(pil_im, pil_mask):
 
 
 # Cell widget for the virtualized grid: shows thumbnail or placeholder, clickable, shows selection border.
-THUMB_SIZE = 128*3
+THUMB_SIZE = 128*4
 
 
 class VirtualizedCell(QWidget):
@@ -228,6 +228,15 @@ class ImageGallery(QWidget):
         else:
             self.selected_images.add(idx)
             widget.setStyleSheet("border: 5px solid blue;")
+
+        img_path, _ = self.image_mask_pairs[idx]
+        marker = "im+"
+        pos = img_path.find(marker)
+        if pos != -1:
+            print(img_path[pos + len(marker):])
+        else:
+            print(img_path)
+
         print("Selected:", len(self.selected_images), "indices")
         self._save_timer.start(400)
 
@@ -260,6 +269,7 @@ if __name__ == "__main__":
     with open(fpath, 'r') as f:
         images = f.read().split('\n')[:-1]
 
+    images = images[:]
     image_mask_pairs = [(p, get_gtpath(p)) for p in images]
 
     gallery = ImageGallery(image_mask_pairs)

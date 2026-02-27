@@ -1,0 +1,14 @@
+# Add directories or file patterns to ignore during indexing (e.g. foo/ or *.csv)
+*.txt
+2026*
+2025*
+2024*
+2023*
+2022*
+2021*
+2020*
+2019*
+2018*
+2017*
+2016*
+
