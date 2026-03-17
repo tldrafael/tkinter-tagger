@@ -94,7 +94,7 @@ def make_mask_green(pil_im, pil_mask):
 
 
 # Cell widget for the virtualized grid: shows thumbnail or placeholder, clickable, shows selection border.
-THUMB_SIZE = 128*4
+THUMB_SIZE = 128*3
 
 
 class VirtualizedCell(QWidget):
@@ -137,7 +137,7 @@ class VirtualizedCell(QWidget):
 
 # The main gallery: virtualized grid with a fixed pool of cells, async thumbnails, debounced save.
 class ImageGallery(QWidget):
-    NUM_COLUMNS = 3
+    NUM_COLUMNS = 4
     POOL_ROWS = 8
     ROW_HEIGHT = THUMB_SIZE + 12
     CELL_WIDTH = THUMB_SIZE + 12
