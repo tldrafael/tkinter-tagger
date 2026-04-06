@@ -34,13 +34,21 @@ from PIL import Image, ImageTk
 DEFAULT_LOG = "labels.txt"
 GREEN_BG = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
-MASK_CASES = [
-    "bgremoval3.dt20260201",
-    "20260106-dinov3-cnnVit-600k-L384-unfrzBB-algnCrnr-higherOS_L768_tuned_L1152-noIS_L1536_L1920C",
-    "bgremoval3.dinov3.dt20251028",
-    "BiRefNet_HRPP",
-]
+# MASK_CASES = [
+#     "bgremoval3.dt20260201",
+#     "20260106-dinov3-cnnVit-600k-L384-unfrzBB-algnCrnr-higherOS_L768_tuned_L1152-noIS_L1536_L1920C",
+#     "bgremoval3.dinov3.dt20251028",
+#     "BiRefNet_HRPP",
+# ]
 
+MASK_CASES = [
+    "bgremoval3.dt20260320",
+    "20251014-refiner+PRODCKPT-from-20250806-expert-GS-afterstg2-sz5k3-mixed10kPP",
+    "20260329-from20260315-capEdge1152-algnCrnr-L1536",
+    "20260329-from20260315-capEdge1152-algnCrnr-L1536_L1920-frzBB",
+    "20260329-from20260315-capEdge1152-algnCrnr-L1536_L1920-frzBB_L2304",
+
+]
 
 def find_resume_index(log_file: str, image_paths: List[Path]) -> int:
     """Find the index to resume from by reading the last image path in the log."""
@@ -171,13 +179,13 @@ class MaskTaggerApp:
         sh = self.root.winfo_screenheight()
 
         cols, rows = 5, 2
-        btn_reserve = 80
-        tw = (sw - 14) // cols
-        th = (sh - 14 - btn_reserve) // rows
+        btn_reserve = 50
+        tw = sw // cols
+        th = (sh - btn_reserve) // rows
         self.tile_size = (tw, th)
 
         self.grid_frame = tk.Frame(self.root)
-        self.grid_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
+        self.grid_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
         for c in range(cols):
             self.grid_frame.columnconfigure(c, weight=1)
         for r in range(rows):
@@ -186,7 +194,7 @@ class MaskTaggerApp:
         self._populate_grid()
 
         self.btn_frame = tk.Frame(self.root)
-        self.btn_frame.pack(fill=tk.X, padx=2, pady=(0, 4))
+        self.btn_frame.pack(fill=tk.X, padx=0, pady=0)
         self._create_buttons()
 
         try:
@@ -232,15 +240,15 @@ class MaskTaggerApp:
         self._photo_refs.append(photo)
 
         frame = tk.Frame(self.grid_frame)
-        frame.grid(row=row, column=col, padx=1, pady=1, sticky="nsew")
+        frame.grid(row=row, column=col, padx=0, pady=0, sticky="nsew")
 
         if title:
-            tk.Label(frame, text=title, font=("Helvetica", 10)).pack(
+            tk.Label(frame, text=title, font=("Helvetica", 8), pady=0).pack(
                 side=tk.TOP)
 
-        lbl = tk.Label(frame, image=photo, cursor="hand2")
+        lbl = tk.Label(frame, image=photo, cursor="hand2", padx=0, pady=0)
         lbl.image = photo
-        lbl.pack(side=tk.TOP)
+        lbl.pack(side=tk.TOP, padx=0, pady=0)
         lbl.bind("<Button-1>", lambda _, idx=tile_idx: self._on_tile_click(idx))
         self._tile_labels.append(lbl)
 
@@ -349,7 +357,7 @@ class MaskTaggerApp:
     # ── buttons ─────────────────────────────────────────────────────────────
 
     def _create_buttons(self):
-        style = {"height": 2, "font": ("Helvetica", 8)}
+        style = {"height": 1, "font": ("Helvetica", 8)}
         btn_idx = 1
 
         for i in range(len(MASK_CASES)):
@@ -358,7 +366,7 @@ class MaskTaggerApp:
             tk.Button(
                 self.btn_frame, text=label,
                 command=lambda name=case_name: self._tag(name), **style,
-            ).pack(side=tk.LEFT, padx=4, pady=4)
+            ).pack(side=tk.LEFT, padx=2, pady=2)
             self.root.bind(str(btn_idx),
                            lambda _, name=case_name: self._tag(name))
             btn_idx += 1
@@ -366,33 +374,33 @@ class MaskTaggerApp:
         tk.Button(
             self.btn_frame, text=f"{btn_idx}. odd",
             command=lambda: self._tag("odd"), **style,
-        ).pack(side=tk.LEFT, padx=4, pady=4)
+        ).pack(side=tk.LEFT, padx=2, pady=2)
         self.root.bind(str(btn_idx), lambda _: self._tag("odd"))
         btn_idx += 1
 
         tk.Button(
             self.btn_frame, text=f"{btn_idx}. all bad",
             command=lambda: self._tag("all bad"), **style,
-        ).pack(side=tk.LEFT, padx=4, pady=4)
+        ).pack(side=tk.LEFT, padx=2, pady=2)
         self.root.bind(str(btn_idx), lambda _: self._tag("all bad"))
         btn_idx += 1
 
         tk.Button(
             self.btn_frame, text=f"{btn_idx}. Skip",
             command=self._advance,
-            height=2, font=("Helvetica", 8),
-        ).pack(side=tk.LEFT, padx=4, pady=4)
+            height=1, font=("Helvetica", 8),
+        ).pack(side=tk.LEFT, padx=2, pady=2)
         self.root.bind(str(btn_idx), lambda _: self._advance())
         btn_idx += 1
 
         # spacer
-        tk.Frame(self.btn_frame, width=30).pack(side=tk.LEFT)
+        tk.Frame(self.btn_frame, width=20).pack(side=tk.LEFT)
 
         tk.Button(
             self.btn_frame, text=f"{btn_idx}. Compose",
             command=self._open_compose,
-            height=2, font=("Helvetica", 8, "bold"),
-        ).pack(side=tk.LEFT, padx=4, pady=4)
+            height=1, font=("Helvetica", 8, "bold"),
+        ).pack(side=tk.LEFT, padx=2, pady=2)
         self.root.bind(str(btn_idx), lambda _: self._open_compose())
 
         self.root.bind("q", lambda _: self.root.quit())
@@ -437,7 +445,7 @@ class MaskTaggerApp:
 # ============================================================================
 
 class ComposeWindow:
-    """Floating editor for composing a new mask from multiple sources."""
+    """Editor for composing a new mask from multiple sources."""
 
     BRUSH_SIZES = [5, 15, 30, 50, 80]
 
