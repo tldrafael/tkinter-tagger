@@ -2,7 +2,7 @@ import sys
 from collections import OrderedDict
 
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QGridLayout, QScrollArea, QHBoxLayout
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread
 
 # Import Pillow libraries for image processing.
@@ -34,7 +34,8 @@ class ThumbnailCache:
 
 # Loads thumbnails in a background thread and emits when each is done.
 class ThumbnailLoader(QThread):
-    pixmap_loaded = pyqtSignal(str, tuple, int, object)  # img_path, size, index, QPixmap
+    # QImage is thread-safe (unlike QPixmap); convert to QPixmap on the main thread.
+    image_loaded = pyqtSignal(str, tuple, int, object)  # img_path, size, index, QImage
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -55,16 +56,16 @@ class ThumbnailLoader(QThread):
                 continue
             img_path, size, index = req
             try:
-                pixmap = QPixmap(img_path)
-                if not pixmap.isNull():
-                    pixmap = pixmap.scaled(
+                image = QImage(img_path)
+                if not image.isNull():
+                    image = image.scaled(
                         size[0], size[1],
                         Qt.KeepAspectRatio,
                         Qt.SmoothTransformation
                     )
-                self.pixmap_loaded.emit(img_path, size, index, pixmap)
+                self.image_loaded.emit(img_path, size, index, image)
             except Exception:
-                self.pixmap_loaded.emit(img_path, size, index, QPixmap())
+                self.image_loaded.emit(img_path, size, index, QImage())
 
     def stop(self):
         self._running = False
@@ -151,7 +152,7 @@ class ImageGallery(QWidget):
         self._save_timer.timeout.connect(self.save_selection)
         self._thumbnail_cache = ThumbnailCache(max_size=800)
         self._thumbnail_loader = ThumbnailLoader(self)
-        self._thumbnail_loader.pixmap_loaded.connect(self._on_pixmap_loaded)
+        self._thumbnail_loader.image_loaded.connect(self._on_image_loaded)
         self._thumbnail_loader.start()
         self.init_ui()
 
@@ -182,12 +183,21 @@ class ImageGallery(QWidget):
         self.setLayout(layout)
         self._update_visible_cells()
 
+        first_row_paths = [
+            self.image_mask_pairs[i][0]
+            for i in range(min(self.NUM_COLUMNS, len(self.image_mask_pairs)))
+        ]
+        print("First row image paths:")
+        for p in first_row_paths:
+            print(f"  {p}")
+
     def _on_cell_clicked(self, cell):
         if cell.current_index < 0:
             return
         self.toggle_selection(cell.current_index, cell)
 
-    def _on_pixmap_loaded(self, img_path, size, index, pixmap):
+    def _on_image_loaded(self, img_path, size, index, qimage):
+        pixmap = QPixmap.fromImage(qimage) if not qimage.isNull() else QPixmap()
         self._thumbnail_cache.put(img_path, size, pixmap)
         for cell in self.pool_cells:
             if cell.current_index == index:

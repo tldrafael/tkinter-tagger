@@ -13,3 +13,7 @@ all.zip
 out*
 202*
 .vscode/
+*.jpg
+*.png
+*.jpeg
+chain-candidates/

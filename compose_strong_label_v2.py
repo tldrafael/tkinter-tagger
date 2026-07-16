@@ -145,6 +145,64 @@ def mask_to_rgb(mask: Image.Image) -> Image.Image:
     return Image.merge("RGB", [mask, mask, mask])
 
 
+def compute_zoom_geometry(
+    native_w: int, native_h: int, win_w: int, win_h: int,
+    scale: float, center_x: float, center_y: float,
+):
+    """Compute the crop box (in native coords) and display size for a
+    zoomed/panned view of a *native_w* x *native_h* image inside a
+    *win_w* x *win_h* window at the given display *scale* (display px
+    per native px), centered as close as possible to
+    (*center_x*, *center_y*).
+
+    The crop box is clamped to the image bounds, which is what makes
+    panning work: as *scale* grows the crop shrinks below the full
+    image and *center_x*/*center_y* pick which region is visible.
+
+    Returns (crop_box, disp_w, disp_h, clamped_center_x, clamped_center_y).
+    """
+    disp_w = max(1, min(win_w, round(native_w * scale)))
+    disp_h = max(1, min(win_h, round(native_h * scale)))
+    crop_w = disp_w / scale
+    crop_h = disp_h / scale
+
+    if crop_w >= native_w:
+        cx = native_w / 2.0
+    else:
+        cx = min(max(center_x, crop_w / 2.0), native_w - crop_w / 2.0)
+    if crop_h >= native_h:
+        cy = native_h / 2.0
+    else:
+        cy = min(max(center_y, crop_h / 2.0), native_h - crop_h / 2.0)
+
+    x0, y0 = cx - crop_w / 2.0, cy - crop_h / 2.0
+    crop_box = (x0, y0, x0 + crop_w, y0 + crop_h)
+    return crop_box, disp_w, disp_h, cx, cy
+
+
+def zoom_anchor_from_pointer(widget, crop_box, disp_w: int, disp_h: int):
+    """Return the native-space point currently under the mouse pointer
+    within *widget*'s window, given the current *crop_box*/display size.
+
+    Falls back to the crop center if the pointer isn't over the
+    displayed image (e.g. it's over a letterboxed margin).
+    """
+    win_w = widget.winfo_width()
+    win_h = widget.winfo_height()
+    px = widget.winfo_pointerx() - widget.winfo_rootx()
+    py = widget.winfo_pointery() - widget.winfo_rooty()
+    img_left = (win_w - disp_w) / 2.0
+    img_top = (win_h - disp_h) / 2.0
+    x0, y0, x1, y1 = crop_box
+
+    if (img_left <= px < img_left + disp_w
+            and img_top <= py < img_top + disp_h):
+        sx = (x1 - x0) / disp_w
+        sy = (y1 - y0) / disp_h
+        return x0 + (px - img_left) * sx, y0 + (py - img_top) * sy
+    return (x0 + x1) / 2.0, (y0 + y1) / 2.0
+
+
 # ============================================================================
 # Main window
 # ============================================================================
@@ -160,12 +218,33 @@ class MaskTaggerApp:
         self._compose_win: Optional[ComposeWindow] = None
         self._photo_refs: list = []
 
-        # Zoom state
+        # Zoom state (single-tile fullscreen overlay)
         self._zoom_overlay: Optional[tk.Canvas] = None
         self._zoom_photo = None
         self._zoom_tile_idx: int = 0
         self._tile_info: List[tuple] = []   # (type, mask_index, title)
         self._tile_labels: List[tk.Label] = []
+        self._zoom_hires: Optional[Image.Image] = None
+        self._zoom_title: str = ""
+        self._zoom_native_w: int = 1
+        self._zoom_native_h: int = 1
+        self._zoom_fit_scale: float = 1.0
+        self._zoom_scale: float = 1.0
+        self._zoom_center_x: float = 0.0
+        self._zoom_center_y: float = 0.0
+        self._zoom_crop: tuple = (0.0, 0.0, 1.0, 1.0)
+        self._zoom_disp_w: int = 1
+        self._zoom_disp_h: int = 1
+
+        # Live zoom mode: a synced magnifier applied to every tile at once
+        self._zoom_mode_active: bool = False
+        self._zoom_factor: float = 3.0
+        self._zoom_mode_var: Optional[tk.BooleanVar] = None
+        self._zoom_factor_var: Optional[tk.StringVar] = None
+        self._zoom_refresh_pending: bool = False
+        self._pending_zoom_pos: Optional[tuple] = None
+        self._live_zoom_refs: list = []
+        self._mask_rgb_full: List[Image.Image] = []
 
         self._load_entry()
         self._build_ui()
@@ -208,12 +287,18 @@ class MaskTaggerApp:
         self.grid_frame.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
         for r in range(2):
             self.grid_frame.rowconfigure(r, weight=1)
+        self.grid_frame.bind("<Leave>", self._on_grid_leave)
 
         self._populate_grid()
 
         self.btn_frame = tk.Frame(self.root)
         self.btn_frame.pack(fill=tk.X, padx=0, pady=0)
         self._create_buttons()
+
+        self.root.bind("z", lambda _: self._toggle_zoom_mode())
+        self.root.bind("<plus>", lambda _: self._on_plus_key())
+        self.root.bind("<equal>", lambda _: self._on_plus_key())
+        self.root.bind("<minus>", lambda _: self._on_minus_key())
 
         try:
             self.root.state("zoomed")
@@ -229,6 +314,9 @@ class MaskTaggerApp:
         self._photo_refs.clear()
         self._tile_info.clear()
         self._tile_labels.clear()
+        self._live_zoom_refs = []
+        self._pending_zoom_pos = None
+        self._mask_rgb_full = [mask_to_rgb(m) for m in self.masks]
 
         sw, sh = self._screen_size
         cols = len(self.masks) + 1
@@ -276,6 +364,10 @@ class MaskTaggerApp:
         lbl.image = photo
         lbl.pack(side=tk.TOP, padx=0, pady=0)
         lbl.bind("<Button-1>", lambda _, idx=tile_idx: self._on_tile_click(idx))
+        lbl.bind("<Motion>", lambda e, idx=tile_idx: self._on_tile_motion(e, idx))
+        lbl.bind("<MouseWheel>", self._on_zoom_wheel)
+        lbl.bind("<Button-4>", lambda _: self._adjust_zoom_factor(1.2))
+        lbl.bind("<Button-5>", lambda _: self._adjust_zoom_factor(1 / 1.2))
         self._tile_labels.append(lbl)
 
     # ── zoom overlay ──────────────────────────────────────────────────────
@@ -309,58 +401,100 @@ class MaskTaggerApp:
         tile_type, mask_idx, title = self._tile_info[tile_idx]
         if tile_type == "empty":
             return
+        # Only reset the zoom frame on a fresh open; navigating between
+        # tiles while already zoomed in keeps the same scale/center so you
+        # can compare the same region across tiles.
+        reset_view = self._zoom_overlay is None
         self._zoom_tile_idx = tile_idx
+        self._zoom_title = title
 
-        hires = self._load_hires(tile_type, mask_idx)
+        self._zoom_hires = self._load_hires(tile_type, mask_idx)
+        self._zoom_native_w, self._zoom_native_h = self._zoom_hires.size
 
         win_w = self.root.winfo_width()
         win_h = self.root.winfo_height()
-        print(f"win_w: {win_w}, win_h: {win_h}")
-        print(f"hires.width: {hires.width}, hires.height: {hires.height}")
-        max_w = int(win_w * 0.90)
-        max_h = int(win_h * 0.85)
-        max_w, max_h = win_w, win_h
-
-        scale = min(max_w / hires.width, max_h / hires.height, 1.0)
-        disp = hires.resize(
-            (max(1, int(hires.width * scale)),
-             max(1, int(hires.height * scale))),
-            Image.LANCZOS,
+        self._zoom_fit_scale = min(
+            win_w / self._zoom_native_w, win_h / self._zoom_native_h, 1.0,
         )
+        if reset_view:
+            self._zoom_scale = self._zoom_fit_scale
+            self._zoom_center_x = self._zoom_native_w / 2.0
+            self._zoom_center_y = self._zoom_native_h / 2.0
+        else:
+            self._zoom_scale = max(
+                self._zoom_fit_scale, min(1.0, self._zoom_scale),
+            )
 
-        if self._zoom_overlay is not None:
-            # Already open – just swap the image (navigation)
-            self._zoom_photo = ImageTk.PhotoImage(disp)
-            self._zoom_overlay.itemconfig(self._zoom_img_id,
-                                          image=self._zoom_photo)
-            cx, cy = win_w // 2, win_h // 2
-            self._zoom_overlay.coords(self._zoom_img_id, cx, cy)
-            self._zoom_overlay.itemconfig(self._zoom_title_id, text=title)
-            return
+        self._render_tile_zoom(create=reset_view)
 
-        self._zoom_overlay = tk.Canvas(
-            self.root, highlightthickness=0,
+        if reset_view:
+            self._zoom_overlay.bind("<Button-1>", lambda _: self._close_zoom())
+            self.root.bind("<Escape>", lambda _: self._close_zoom())
+            self.root.bind("<Left>", lambda _: self._zoom_navigate(-1))
+            self.root.bind("<Right>", lambda _: self._zoom_navigate(1))
+
+    def _render_tile_zoom(self, create: bool):
+        win_w = self.root.winfo_width()
+        win_h = self.root.winfo_height()
+
+        crop_box, disp_w, disp_h, cx, cy = compute_zoom_geometry(
+            self._zoom_native_w, self._zoom_native_h, win_w, win_h,
+            self._zoom_scale, self._zoom_center_x, self._zoom_center_y,
         )
-        self._zoom_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+        self._zoom_crop = crop_box
+        self._zoom_disp_w, self._zoom_disp_h = disp_w, disp_h
+        self._zoom_center_x, self._zoom_center_y = cx, cy
 
-        self._zoom_overlay.create_rectangle(
-            0, 0, win_w, win_h, fill="black", stipple="gray50",
+        x0, y0, x1, y1 = crop_box
+        crop = self._zoom_hires.crop(
+            (int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))),
         )
+        resample = Image.NEAREST if self._zoom_scale >= 0.999 else Image.LANCZOS
+        disp = crop.resize((disp_w, disp_h), resample)
 
+        pct = round(self._zoom_scale * 100)
+        title = f"{self._zoom_title}  ({pct}%)"
+        cx_screen, cy_screen = win_w // 2, win_h // 2
         self._zoom_photo = ImageTk.PhotoImage(disp)
-        cx, cy = win_w // 2, win_h // 2
-        self._zoom_img_id = self._zoom_overlay.create_image(
-            cx, cy, image=self._zoom_photo, anchor="center",
-        )
-        self._zoom_title_id = self._zoom_overlay.create_text(
-            win_w // 2, 24, text=title,
-            fill="white", font=("Helvetica", 16, "bold"), anchor="center",
-        )
 
-        self._zoom_overlay.bind("<Button-1>", lambda _: self._close_zoom())
-        self.root.bind("<Escape>", lambda _: self._close_zoom())
-        self.root.bind("<Left>", lambda _: self._zoom_navigate(-1))
-        self.root.bind("<Right>", lambda _: self._zoom_navigate(1))
+        if create:
+            self._zoom_overlay = tk.Canvas(
+                self.root, highlightthickness=0,
+            )
+            self._zoom_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+
+            self._zoom_overlay.create_rectangle(
+                0, 0, win_w, win_h, fill="black", stipple="gray50",
+            )
+
+            self._zoom_img_id = self._zoom_overlay.create_image(
+                cx_screen, cy_screen, image=self._zoom_photo, anchor="center",
+            )
+            self._zoom_title_id = self._zoom_overlay.create_text(
+                win_w // 2, 24, text=title,
+                fill="white", font=("Helvetica", 16, "bold"), anchor="center",
+            )
+        else:
+            self._zoom_overlay.itemconfig(
+                self._zoom_img_id, image=self._zoom_photo)
+            self._zoom_overlay.coords(
+                self._zoom_img_id, cx_screen, cy_screen)
+            self._zoom_overlay.itemconfig(self._zoom_title_id, text=title)
+            self._zoom_overlay.coords(
+                self._zoom_title_id, win_w // 2, 24)
+
+    def _adjust_tile_zoom(self, mult: float):
+        if self._zoom_overlay is None:
+            return
+        anchor_x, anchor_y = zoom_anchor_from_pointer(
+            self.root, self._zoom_crop, self._zoom_disp_w, self._zoom_disp_h,
+        )
+        new_scale = max(self._zoom_fit_scale, min(1.0, self._zoom_scale * mult))
+        if new_scale == self._zoom_scale:
+            return
+        self._zoom_scale = new_scale
+        self._zoom_center_x, self._zoom_center_y = anchor_x, anchor_y
+        self._render_tile_zoom(create=False)
 
     def _zoom_navigate(self, direction: int):
         if self._zoom_overlay is None:
@@ -382,6 +516,121 @@ class MaskTaggerApp:
                 self.root.unbind(key)
             except Exception:
                 pass
+
+    # ── zoom mode (synced magnifier across every tile) ─────────────────────
+
+    def _tile_source_image(self, tile_type: str, mask_idx: int) -> Optional[Image.Image]:
+        """Full-resolution source image backing a given tile."""
+        if tile_type == "original":
+            return self.original
+        if tile_type == "blend":
+            return self.blends[mask_idx]
+        if tile_type == "mask":
+            return self._mask_rgb_full[mask_idx]
+        return None
+
+    def _toggle_zoom_mode(self):
+        self._zoom_mode_active = not self._zoom_mode_active
+        if self._zoom_mode_var is not None:
+            self._zoom_mode_var.set(self._zoom_mode_active)
+        if not self._zoom_mode_active:
+            self._restore_thumbnails()
+
+    def _adjust_zoom_factor(self, mult: float):
+        self._zoom_factor = max(1.2, min(20.0, self._zoom_factor * mult))
+        if self._zoom_factor_var is not None:
+            self._zoom_factor_var.set(f"Zoom: {self._zoom_factor:.1f}x")
+        if self._zoom_mode_active and self._pending_zoom_pos is not None:
+            self._apply_live_zoom(*self._pending_zoom_pos)
+
+    def _on_plus_key(self):
+        """'+'/'=' zooms the fullscreen tile overlay if it's open,
+        otherwise it adjusts the synced-magnifier zoom factor."""
+        if self._zoom_overlay is not None:
+            self._adjust_tile_zoom(1.25)
+        else:
+            self._adjust_zoom_factor(1.5)
+
+    def _on_minus_key(self):
+        if self._zoom_overlay is not None:
+            self._adjust_tile_zoom(1 / 1.25)
+        else:
+            self._adjust_zoom_factor(1 / 1.5)
+
+    def _on_zoom_wheel(self, event):
+        if not self._zoom_mode_active:
+            return
+        mult = 1.2 if event.delta > 0 else 1 / 1.2
+        self._adjust_zoom_factor(mult)
+
+    def _on_tile_motion(self, event, tile_idx: int):
+        if not self._zoom_mode_active:
+            return
+        tile_type, _, _ = self._tile_info[tile_idx]
+        if tile_type == "empty":
+            return
+        lbl = self._tile_labels[tile_idx]
+        w, h = lbl.winfo_width(), lbl.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        rx = min(max(event.x / w, 0.0), 1.0)
+        ry = min(max(event.y / h, 0.0), 1.0)
+        self._pending_zoom_pos = (rx, ry)
+        if not self._zoom_refresh_pending:
+            self._zoom_refresh_pending = True
+            self.root.after(20, self._do_live_zoom)
+
+    def _on_grid_leave(self, event):
+        if self._zoom_mode_active:
+            self._restore_thumbnails()
+
+    def _do_live_zoom(self):
+        self._zoom_refresh_pending = False
+        if not self._zoom_mode_active or self._pending_zoom_pos is None:
+            return
+        self._apply_live_zoom(*self._pending_zoom_pos)
+
+    def _apply_live_zoom(self, rx: float, ry: float):
+        """Show a magnified crop centered at fractional (rx, ry) in every tile."""
+        orig_w, orig_h = self.original.size
+        factor = self._zoom_factor
+        crop_w = max(1, int(orig_w / factor))
+        crop_h = max(1, int(orig_h / factor))
+        cx = int(rx * orig_w)
+        cy = int(ry * orig_h)
+        x1 = min(max(cx - crop_w // 2, 0), max(orig_w - crop_w, 0))
+        y1 = min(max(cy - crop_h // 2, 0), max(orig_h - crop_h, 0))
+        x2 = min(x1 + crop_w, orig_w)
+        y2 = min(y1 + crop_h, orig_h)
+
+        refs = []
+        for idx, (tile_type, mask_idx, _title) in enumerate(self._tile_info):
+            if tile_type == "empty":
+                continue
+            src = self._tile_source_image(tile_type, mask_idx)
+            if src is None:
+                continue
+            lbl = self._tile_labels[idx]
+            disp_w, disp_h = lbl.winfo_width(), lbl.winfo_height()
+            if disp_w <= 1 or disp_h <= 1:
+                continue
+            crop = src.crop((x1, y1, x2, y2)).resize(
+                (disp_w, disp_h), Image.LANCZOS)
+            photo = ImageTk.PhotoImage(crop)
+            refs.append(photo)
+            lbl.config(image=photo)
+            lbl.image = photo
+        self._live_zoom_refs = refs
+
+    def _restore_thumbnails(self):
+        self._pending_zoom_pos = None
+        for idx, lbl in enumerate(self._tile_labels):
+            if idx >= len(self._photo_refs):
+                continue
+            photo = self._photo_refs[idx]
+            lbl.config(image=photo)
+            lbl.image = photo
+        self._live_zoom_refs = []
 
     # ── buttons ─────────────────────────────────────────────────────────────
 
@@ -441,6 +690,22 @@ class MaskTaggerApp:
         self.root.bind(str(btn_idx), lambda _: self._open_compose())
 
         self.root.bind("q", lambda _: self.root.quit())
+
+        # Zoom mode: a synced magnifier applied to every tile simultaneously
+        self._zoom_mode_var = tk.BooleanVar(value=self._zoom_mode_active)
+        tk.Checkbutton(
+            self.btn_frame, text="Zoom Mode (Z)",
+            variable=self._zoom_mode_var,
+            command=self._toggle_zoom_mode,
+            font=("Helvetica", 8, "bold"),
+        ).pack(side=tk.RIGHT, padx=(2, 8), pady=2)
+
+        self._zoom_factor_var = tk.StringVar(
+            value=f"Zoom: {self._zoom_factor:.1f}x")
+        tk.Label(
+            self.btn_frame, textvariable=self._zoom_factor_var,
+            font=("Helvetica", 8),
+        ).pack(side=tk.RIGHT, padx=2, pady=2)
 
     def _tag(self, label: str):
         with open(self.log_file, "a") as f:
@@ -519,6 +784,11 @@ class ComposeWindow:
         self._zoom_disp_h: int = 0
         self._zoom_sx: float = 1.0
         self._zoom_sy: float = 1.0
+        self._zoom_fit_scale: float = 1.0
+        self._zoom_scale: float = 1.0
+        self._zoom_center_x: float = 0.0
+        self._zoom_center_y: float = 0.0
+        self._zoom_crop: tuple = (0.0, 0.0, 1.0, 1.0)
 
         self.window = tk.Toplevel(parent)
         self.window.title("Compose Mask")
@@ -683,6 +953,9 @@ class ComposeWindow:
         self.window.bind("p", lambda _: self._toggle_pencil_key())
         self.window.bind("<Command-z>", lambda _: self._undo())
         self.window.bind("<Control-z>", lambda _: self._undo())
+        self.window.bind("<plus>", lambda _: self._adjust_zoom_panel(1.25))
+        self.window.bind("<equal>", lambda _: self._adjust_zoom_panel(1.25))
+        self.window.bind("<minus>", lambda _: self._adjust_zoom_panel(1 / 1.25))
 
         for digit in range(10):
             self.window.bind(
@@ -1096,66 +1369,33 @@ class ComposeWindow:
         self._show_zoom_panel(zoom_type, create=True)
 
     def _show_zoom_panel(self, zoom_type: str, create: bool = False):
+        # Only reset the zoom frame on a fresh open; navigating between
+        # panels while already zoomed in keeps the same scale/center so you
+        # can compare the same region across panels. All panels share the
+        # original image's dimensions, so the fit scale is computed from
+        # that directly (no need to build the panel's hires image here).
+        reset_view = create
         self._zoom_type = zoom_type
 
         win_w = self.window.winfo_width()
         win_h = self.window.winfo_height()
-        print(f"win_w: {win_w}, win_h: {win_h}")
         max_w = int(win_w * 0.92)
         max_h = int(win_h * 0.85)
-
-        hires = self._zoom_get_hires(zoom_type)
-
-        scale = min(max_w / hires.width, max_h / hires.height, 1.0)
-        self._zoom_disp_w = max(1, int(hires.width * scale))
-        self._zoom_disp_h = max(1, int(hires.height * scale))
-        self._zoom_sx = self.original.width / self._zoom_disp_w
-        self._zoom_sy = self.original.height / self._zoom_disp_h
-
-        disp = hires.resize(
-            (self._zoom_disp_w, self._zoom_disp_h), Image.LANCZOS,
+        self._zoom_fit_scale = min(
+            max_w / self.original.width, max_h / self.original.height, 1.0,
         )
-        self._zoom_photo = ImageTk.PhotoImage(disp)
-        cx, cy = win_w // 2, win_h // 2
+        if reset_view:
+            self._zoom_scale = self._zoom_fit_scale
+            self._zoom_center_x = self.original.width / 2.0
+            self._zoom_center_y = self.original.height / 2.0
+        else:
+            self._zoom_scale = max(
+                self._zoom_fit_scale, min(1.0, self._zoom_scale),
+            )
 
-        titles = {
-            "donor": f"Donor Mask {self.donor_idx + 1}",
-            "composed": "Composed Mask",
-            "blend": "Blended Preview",
-            "original": "Original Image",
-        }
-        paintable = zoom_type in ("donor", "composed") or (
-            zoom_type in ("original", "blend")
-            and (self._eraser_mode or self._pencil_mode)
-        )
-        hint = "  (right-click / Esc to close, paint with left-click)" \
-            if paintable else "  (right-click / Esc to close)"
-        title = titles.get(zoom_type, "") + hint
+        self._render_zoom_panel(create=create)
 
         if create:
-            self._zoom_overlay = tk.Canvas(
-                self.window, highlightthickness=0,
-            )
-            self._zoom_overlay.place(x=0, y=0, relwidth=1, relheight=1)
-
-            self._zoom_overlay.create_rectangle(
-                0, 0, win_w, win_h, fill="black", stipple="gray50",
-            )
-
-            self._zoom_img_id = self._zoom_overlay.create_image(
-                cx, cy, image=self._zoom_photo, anchor="center",
-            )
-            self._zoom_title_id = self._zoom_overlay.create_text(
-                win_w // 2, 24, text=title,
-                fill="white", font=("Helvetica", 14, "bold"),
-                anchor="center",
-            )
-
-            self._zoom_brush_oval = self._zoom_overlay.create_oval(
-                0, 0, 0, 0, outline="red", width=2,
-            )
-            self._zoom_overlay.tag_raise(self._zoom_brush_oval)
-
             self._zoom_overlay.bind("<B1-Motion>", self._on_zoom_paint)
             self._zoom_overlay.bind("<Button-1>", self._on_zoom_paint_start)
             self._zoom_overlay.bind("<Motion>", self._on_zoom_hover)
@@ -1168,16 +1408,95 @@ class ComposeWindow:
                              lambda _: self._zoom_navigate(-1))
             self.window.bind("<Right>",
                              lambda _: self._zoom_navigate(1))
+
+    def _render_zoom_panel(self, create: bool, reset_brush: bool = True):
+        win_w = self.window.winfo_width()
+        win_h = self.window.winfo_height()
+
+        hires = self._zoom_get_hires(self._zoom_type)
+
+        crop_box, disp_w, disp_h, cx, cy = compute_zoom_geometry(
+            hires.width, hires.height, win_w, win_h,
+            self._zoom_scale, self._zoom_center_x, self._zoom_center_y,
+        )
+        self._zoom_crop = crop_box
+        self._zoom_disp_w, self._zoom_disp_h = disp_w, disp_h
+        self._zoom_center_x, self._zoom_center_y = cx, cy
+
+        x0, y0, x1, y1 = crop_box
+        crop = hires.crop(
+            (int(round(x0)), int(round(y0)), int(round(x1)), int(round(y1))),
+        )
+        self._zoom_sx = (x1 - x0) / disp_w
+        self._zoom_sy = (y1 - y0) / disp_h
+
+        resample = Image.NEAREST if self._zoom_scale >= 0.999 else Image.LANCZOS
+        disp = crop.resize((disp_w, disp_h), resample)
+        self._zoom_photo = ImageTk.PhotoImage(disp)
+        cx_screen, cy_screen = win_w // 2, win_h // 2
+
+        titles = {
+            "donor": f"Donor Mask {self.donor_idx + 1}",
+            "composed": "Composed Mask",
+            "blend": "Blended Preview",
+            "original": "Original Image",
+        }
+        paintable = self._zoom_type in ("donor", "composed") or (
+            self._zoom_type in ("original", "blend")
+            and (self._eraser_mode or self._pencil_mode)
+        )
+        hint = "  (right-click / Esc to close, paint with left-click)" \
+            if paintable else "  (right-click / Esc to close)"
+        pct = round(self._zoom_scale * 100)
+        title = titles.get(self._zoom_type, "") + f"  [{pct}%]" + hint
+
+        if create:
+            self._zoom_overlay = tk.Canvas(
+                self.window, highlightthickness=0,
+            )
+            self._zoom_overlay.place(x=0, y=0, relwidth=1, relheight=1)
+
+            self._zoom_overlay.create_rectangle(
+                0, 0, win_w, win_h, fill="black", stipple="gray50",
+            )
+
+            self._zoom_img_id = self._zoom_overlay.create_image(
+                cx_screen, cy_screen, image=self._zoom_photo, anchor="center",
+            )
+            self._zoom_title_id = self._zoom_overlay.create_text(
+                win_w // 2, 24, text=title,
+                fill="white", font=("Helvetica", 14, "bold"),
+                anchor="center",
+            )
+
+            self._zoom_brush_oval = self._zoom_overlay.create_oval(
+                0, 0, 0, 0, outline="red", width=2,
+            )
+            self._zoom_overlay.tag_raise(self._zoom_brush_oval)
         else:
             self._zoom_overlay.itemconfig(
                 self._zoom_img_id, image=self._zoom_photo)
-            self._zoom_overlay.coords(self._zoom_img_id, cx, cy)
+            self._zoom_overlay.coords(self._zoom_img_id, cx_screen, cy_screen)
             self._zoom_overlay.itemconfig(
                 self._zoom_title_id, text=title)
             self._zoom_overlay.coords(
                 self._zoom_title_id, win_w // 2, 24)
-            self._zoom_overlay.coords(
-                self._zoom_brush_oval, 0, 0, 0, 0)
+            if reset_brush:
+                self._zoom_overlay.coords(
+                    self._zoom_brush_oval, 0, 0, 0, 0)
+
+    def _adjust_zoom_panel(self, mult: float):
+        if self._zoom_overlay is None:
+            return
+        anchor_x, anchor_y = zoom_anchor_from_pointer(
+            self.window, self._zoom_crop, self._zoom_disp_w, self._zoom_disp_h,
+        )
+        new_scale = max(self._zoom_fit_scale, min(1.0, self._zoom_scale * mult))
+        if new_scale == self._zoom_scale:
+            return
+        self._zoom_scale = new_scale
+        self._zoom_center_x, self._zoom_center_y = anchor_x, anchor_y
+        self._render_zoom_panel(create=False, reset_brush=False)
 
     def _zoom_navigate(self, direction: int):
         if self._zoom_overlay is None:
@@ -1233,8 +1552,9 @@ class ComposeWindow:
                 or rel_y >= self._zoom_disp_h):
             return
 
-        fx = int(rel_x * self._zoom_sx)
-        fy = int(rel_y * self._zoom_sy)
+        crop_x0, crop_y0, _, _ = self._zoom_crop
+        fx = int(crop_x0 + rel_x * self._zoom_sx)
+        fy = int(crop_y0 + rel_y * self._zoom_sy)
         br = int(self.brush_size * max(self._zoom_sx, self._zoom_sy))
 
         h, w = self.composed.shape
@@ -1274,13 +1594,7 @@ class ComposeWindow:
     def _do_zoom_refresh(self):
         self._zoom_refresh_pending = False
         if self._zoom_overlay is not None and self._zoom_type != "donor":
-            hires = self._zoom_get_hires(self._zoom_type)
-            disp = hires.resize(
-                (self._zoom_disp_w, self._zoom_disp_h), Image.LANCZOS,
-            )
-            self._zoom_photo = ImageTk.PhotoImage(disp)
-            self._zoom_overlay.itemconfig(
-                self._zoom_img_id, image=self._zoom_photo)
+            self._render_zoom_panel(create=False, reset_brush=False)
             self._zoom_overlay.tag_raise(self._zoom_brush_oval)
         self._refresh_display()
 
