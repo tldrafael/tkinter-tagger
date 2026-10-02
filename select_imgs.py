@@ -1,13 +1,22 @@
+import hashlib
+import os
 import sys
-from collections import OrderedDict
+import threading
+from collections import OrderedDict, deque
+from pathlib import Path
 
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QGridLayout, QScrollArea, QHBoxLayout
-from PyQt5.QtGui import QPixmap, QImage
-from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread
+from PyQt5.QtGui import QPixmap, QImage, QImageReader
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer, QThread, QSize
 
 # Import Pillow libraries for image processing.
 from PIL import Image, ImageChops, ImageQt
 import numpy as np
+
+
+# Small JPEGs written after the first decode. Keyed by path, mtime, and size.
+THUMB_CACHE_DIR = Path.home() / ".cache" / "select_imgs_thumbs"
+N_LOADERS = 4
 
 
 # In-memory LRU cache for thumbnails. Key: (img_path, size), value: QPixmap.
@@ -32,43 +41,120 @@ class ThumbnailCache:
             self._cache.popitem(last=False)
 
 
-# Loads thumbnails in a background thread and emits when each is done.
+def _disk_thumb_path(img_path):
+    st = os.stat(img_path)
+    key = hashlib.sha1(os.path.abspath(img_path).encode()).hexdigest()
+    return THUMB_CACHE_DIR / f"{key}_{st.st_mtime_ns}_{st.st_size}.jpg"
+
+
+def load_thumbnail(img_path, size):
+    """Decode a thumbnail, using a reduced JPEG size and the on-disk cache.
+
+    QImage(path) decodes the full frame (hundreds of MB for the large photos
+    in this list). QImageReader.setScaledSize asks the JPEG decoder for a
+    smaller image, which is both faster and much lighter.
+    """
+    try:
+        cached_path = _disk_thumb_path(img_path)
+    except OSError:
+        cached_path = None
+    if cached_path is not None and cached_path.is_file():
+        cached = QImage(str(cached_path))
+        if not cached.isNull():
+            return cached, False
+
+    reader = QImageReader(img_path)
+    reader.setAutoTransform(True)
+    orig = reader.size()
+    tw, th = size
+    if orig.isValid() and orig.width() > 0 and orig.height() > 0:
+        scale = min(tw / orig.width(), th / orig.height(), 1.0)
+        if scale < 1.0:
+            reader.setScaledSize(QSize(
+                max(1, round(orig.width() * scale)),
+                max(1, round(orig.height() * scale)),
+            ))
+    return reader.read(), True
+
+
+def store_thumbnail(img_path, image):
+    if image.isNull():
+        return
+    try:
+        cached_path = _disk_thumb_path(img_path)
+        cached_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached_path.with_name(cached_path.name + ".tmp")
+        if image.save(str(tmp), "JPEG", 80):
+            os.replace(tmp, cached_path)
+    except OSError:
+        pass
+
+
+class _LoadQueue:
+    """Visible-cell jobs only. A new viewport replaces anything still pending."""
+
+    def __init__(self):
+        self._cv = threading.Condition()
+        self._pending = deque()
+        self._wanted = set()
+        self._inflight = set()
+        self._running = True
+
+    def set_requests(self, jobs):
+        with self._cv:
+            self._wanted = set(jobs)
+            self._pending.clear()
+            for job in jobs:
+                if job not in self._inflight:
+                    self._pending.append(job)
+            self._cv.notify_all()
+
+    def pop(self):
+        with self._cv:
+            while self._running:
+                while self._pending:
+                    job = self._pending.popleft()
+                    if job in self._wanted and job not in self._inflight:
+                        self._inflight.add(job)
+                        return job
+                self._cv.wait(timeout=0.2)
+            return None
+
+    def done(self, job):
+        with self._cv:
+            self._inflight.discard(job)
+
+    def stop(self):
+        with self._cv:
+            self._running = False
+            self._pending.clear()
+            self._cv.notify_all()
+
+
+# Loads thumbnails off the GUI thread and emits when each is done.
 class ThumbnailLoader(QThread):
     # QImage is thread-safe (unlike QPixmap); convert to QPixmap on the main thread.
     image_loaded = pyqtSignal(str, tuple, int, object)  # img_path, size, index, QImage
 
-    def __init__(self, parent=None):
+    def __init__(self, queue, parent=None):
         super().__init__(parent)
-        self._queue = []
-        self._mutex = __import__("threading").Lock()
-        self._running = True
-
-    def request_load(self, img_path, size, index):
-        with self._mutex:
-            self._queue.append((img_path, size, index))
+        self._queue = queue
 
     def run(self):
-        while self._running:
-            with self._mutex:
-                req = self._queue.pop(0) if self._queue else None
+        while True:
+            req = self._queue.pop()
             if req is None:
-                self.msleep(20)
-                continue
+                return
             img_path, size, index = req
+            fresh = False
             try:
-                image = QImage(img_path)
-                if not image.isNull():
-                    image = image.scaled(
-                        size[0], size[1],
-                        Qt.KeepAspectRatio,
-                        Qt.SmoothTransformation
-                    )
-                self.image_loaded.emit(img_path, size, index, image)
+                image, fresh = load_thumbnail(img_path, size)
             except Exception:
-                self.image_loaded.emit(img_path, size, index, QImage())
-
-    def stop(self):
-        self._running = False
+                image = QImage()
+            self.image_loaded.emit(img_path, size, index, image)
+            self._queue.done(req)
+            if fresh:
+                store_thumbnail(img_path, image)
 
 
 # A clickable QLabel that emits a signal when clicked.
@@ -100,6 +186,7 @@ THUMB_SIZE = 128*3
 
 class VirtualizedCell(QWidget):
     clicked = pyqtSignal()
+    _placeholder = None
 
     def __init__(self, size=(THUMB_SIZE, THUMB_SIZE), parent=None):
         super().__init__(parent)
@@ -117,9 +204,11 @@ class VirtualizedCell(QWidget):
         self.setStyleSheet("border: 1px solid gray;")
 
     def set_placeholder(self):
-        placeholder = QPixmap(self._size[0], self._size[1])
-        placeholder.fill(Qt.gray)
-        self.img_label.setPixmap(placeholder)
+        if VirtualizedCell._placeholder is None:
+            placeholder = QPixmap(self._size[0], self._size[1])
+            placeholder.fill(Qt.gray)
+            VirtualizedCell._placeholder = placeholder
+        self.img_label.setPixmap(VirtualizedCell._placeholder)
 
     def set_pixmap(self, pixmap):
         if pixmap is None or pixmap.isNull():
@@ -151,9 +240,17 @@ class ImageGallery(QWidget):
         self._save_timer.setSingleShot(True)
         self._save_timer.timeout.connect(self.save_selection)
         self._thumbnail_cache = ThumbnailCache(max_size=800)
-        self._thumbnail_loader = ThumbnailLoader(self)
-        self._thumbnail_loader.image_loaded.connect(self._on_image_loaded)
-        self._thumbnail_loader.start()
+        self._load_queue = _LoadQueue()
+        self._thumbnail_loaders = []
+        for _ in range(N_LOADERS):
+            loader = ThumbnailLoader(self._load_queue, self)
+            loader.image_loaded.connect(self._on_image_loaded)
+            loader.start()
+            self._thumbnail_loaders.append(loader)
+        self._last_first_row = None
+        self._load_timer = QTimer(self)
+        self._load_timer.setSingleShot(True)
+        self._load_timer.timeout.connect(self._request_visible_loads)
         self.init_ui()
 
     def init_ui(self):
@@ -207,11 +304,22 @@ class ImageGallery(QWidget):
     def _update_visible_cells(self):
         scroll_value = self.scroll_area.verticalScrollBar().value()
         first_row = scroll_value // self.ROW_HEIGHT
+        # The scrollbar reports every pixel. The set of rows only changes once
+        # per row, and re-queueing on each pixel was re-decoding the same JPEGs.
+        if first_row == self._last_first_row:
+            return
+        self._last_first_row = first_row
+        self._layout_pool(first_row)
+        self._load_timer.start(60)
+
+    def _layout_pool(self, first_row):
+        thumb_size = (THUMB_SIZE, THUMB_SIZE)
         for i, cell in enumerate(self.pool_cells):
             r = i // self.NUM_COLUMNS
             c = i % self.NUM_COLUMNS
             index = (first_row + r) * self.NUM_COLUMNS + c
             if index >= len(self.image_mask_pairs):
+                cell.current_index = -1
                 cell.setVisible(False)
                 continue
             cell.setVisible(True)
@@ -221,15 +329,26 @@ class ImageGallery(QWidget):
                 self.CELL_WIDTH,
                 self.ROW_HEIGHT
             )
+            img_path, _mask_path = self.image_mask_pairs[index]
             cell.current_index = index
-            img_path, mask_path = self.image_mask_pairs[index]
             cell.update_selection_style(index in self.selected_images)
-            cached = self._thumbnail_cache.get(img_path, (THUMB_SIZE, THUMB_SIZE))
+            cached = self._thumbnail_cache.get(img_path, thumb_size)
             if cached is not None:
                 cell.set_pixmap(cached)
             else:
                 cell.set_placeholder()
-                self._thumbnail_loader.request_load(img_path, (THUMB_SIZE, THUMB_SIZE), index)
+
+    def _request_visible_loads(self):
+        thumb_size = (THUMB_SIZE, THUMB_SIZE)
+        pending = []
+        for cell in self.pool_cells:
+            index = cell.current_index
+            if index < 0:
+                continue
+            img_path = self.image_mask_pairs[index][0]
+            if self._thumbnail_cache.get(img_path, thumb_size) is None:
+                pending.append((img_path, thumb_size, index))
+        self._load_queue.set_requests(pending)
 
     def toggle_selection(self, idx, widget):
         if idx in self.selected_images:
@@ -258,8 +377,9 @@ class ImageGallery(QWidget):
         print("Saved selected image paths to out.txt")
 
     def closeEvent(self, event):
-        self._thumbnail_loader.stop()
-        self._thumbnail_loader.wait(1000)
+        self._load_queue.stop()
+        for loader in self._thumbnail_loaders:
+            loader.wait(1000)
         super().closeEvent(event)
 
 

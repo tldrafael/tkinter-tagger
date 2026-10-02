@@ -41,18 +41,27 @@ GREEN_BG = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 #     "BiRefNet_HRPP",
 # ]
 
+# UHR
+# MASK_CASES = [
+#     "bgremoval3.singlearch.dt20260402",
+#     "bgremoval3.dt20260320",
+#     "bgremoval3.dinov3.dt20251028",
+#     "BiRefNet_HRPP",
+#     "20260529_fullrun-dinov3cnn-tipsv2_L384_L768_tuned_L1152-noIS-frzTIPS_L1536_L1920.bakPP",
+
+# ]
+
+# Cars
 MASK_CASES = [
-    # "../gt",
-    # "20260329-from20260315-capEdge1152-algnCrnr-L1536_L1920-frzBB_L2304_matLossPP",
-    # "20260413-from20260106-L768_tuned+expandedGS_L1152-noIS-bf16_cap1152-L1536_L1920-frzBBViT_L2304_matLossPP",
-    "bgremoval3.singlearch.dt20260402",
     "bgremoval3.dt20260320",
     "bgremoval3.dinov3.dt20251028",
-    # "bgremoval3.singlearch.dt20260611",
+    # "bgremoval3.singlearch.dt20260402",
+    "bgremoval3.singlearch.dt20260611",
     "BiRefNet_HRPP",
-    "20260529_fullrun-dinov3cnn-tipsv2_L384_L768_tuned_L1152-noIS-frzTIPS_L1536_L1920.bakPP",
-
+    # "20260529_fullrun-dinov3cnn-tipsv2_L384_L768_tuned_L1152-noIS-frzTIPS_L1536_L1920.bakPP",
+    "20260529_fullrun-dinov3cnn-tipsv2_L384_L768_tuned_L1152-noIS-frzTIPS_L1536_L1920.bak_matLoss-frzBBPP",
 ]
+
 
 OPTIONAL_CASES = {"../gt"}
 
