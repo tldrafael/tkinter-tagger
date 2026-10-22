@@ -20,6 +20,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
+from tkinter import font as tkfont
 
 from typing import List, Optional
 
@@ -152,6 +153,29 @@ def blend_on_green(image: Image.Image, mask: Image.Image) -> Image.Image:
 
 def mask_to_rgb(mask: Image.Image) -> Image.Image:
     return Image.merge("RGB", [mask, mask, mask])
+
+
+def shorten_title(name: str, font: tkfont.Font, max_px: int) -> str:
+    """Fit *name* on one line. Long names become ``prefix....suffix``."""
+    if max_px <= 0 or font.measure(name) <= max_px:
+        return name
+    ellipsis = "...."
+    max_n = (len(name) - len(ellipsis)) // 2
+    if max_n < 1:
+        return name
+    lo, hi = 1, max_n
+    best = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        candidate = name[:mid] + ellipsis + name[-mid:]
+        if font.measure(candidate) <= max_px:
+            best = mid
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if best < 1:
+        return ellipsis if font.measure(ellipsis) <= max_px else name
+    return name[:best] + ellipsis + name[-best:]
 
 
 def compute_zoom_geometry(
@@ -337,22 +361,24 @@ class MaskTaggerApp:
         for c in range(cols + 5):
             self.grid_frame.columnconfigure(c, weight=(1 if c < cols else 0))
 
-        # Row 0: original + 4 blended images
+        # Row 0: original + blended images
         self._add_tile(resize_to_fit(self.original, tw, th), 0, 0,
                        "Original", ("original", -1, "Original"))
         for i, bl in enumerate(self.blends):
+            case = self.active_cases[i]
             self._add_tile(resize_to_fit(bl, tw, th), 0, i + 1,
-                           f"Blend {i + 1}", ("blend", i, f"Blend {i + 1}"))
+                           case, ("blend", i, case))
 
         # Row 1, col 0: dark placeholder (no mask for original)
         ph_img = Image.new("RGB", (1, 1), (30, 30, 30))
         self._add_tile(resize_to_fit(ph_img, tw, th), 1, 0,
                        "", ("empty", -1, ""))
 
-        # Row 1, cols 1-4: masks
+        # Row 1: masks
         for i, m in enumerate(self.masks):
+            case = self.active_cases[i]
             self._add_tile(resize_to_fit(mask_to_rgb(m), tw, th), 1, i + 1,
-                           f"Mask {i + 1}", ("mask", i, f"Mask {i + 1}"))
+                           case, ("mask", i, case))
 
     def _add_tile(self, img: Image.Image, row: int, col: int, title: str,
                   info: tuple):
@@ -366,7 +392,9 @@ class MaskTaggerApp:
         frame.grid(row=row, column=col, padx=0, pady=0, sticky="nsew")
 
         if title:
-            tk.Label(frame, text=title, font=("Helvetica", 8), pady=0).pack(
+            title_font = tkfont.Font(family="Helvetica", size=8)
+            label = shorten_title(title, title_font, self.tile_size[0])
+            tk.Label(frame, text=label, font=title_font, pady=0).pack(
                 side=tk.TOP)
 
         lbl = tk.Label(frame, image=photo, cursor="hand2", padx=0, pady=0)
